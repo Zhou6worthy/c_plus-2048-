@@ -26,9 +26,6 @@
     </ClInclude>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Game2048.cpp">
-      <Filter>源文件</Filter>
-    </ClCompile>
     <ClCompile Include="Scoreboard.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
@@ -38,8 +35,14 @@
     <ClCompile Include="main.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
-  </ItemGroup>
-  <ItemGroup>
-    <Text Include="scores.txt" />
+    <ClCompile Include="Game2048_Common.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Game2048Classic.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="Game2048Endless.cpp">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>

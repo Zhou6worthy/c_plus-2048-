@@ -1,8 +1,13 @@
-﻿#ifndef SCOREBOARD_H
+#ifndef SCOREBOARD_H
 #define SCOREBOARD_H
 
 #include <string>
 #include <fstream> // 用于文件读写
+#include <vector>   // 用于存储排行榜数据
+#include <tuple>    // 用于返回多个值
+
+// 最大保存条目数
+static const int MAX_SCORE_ENTRIES = 10;
 
 // 链表节点：存储单局游戏数据
 struct ScoreNode {
@@ -29,10 +34,13 @@ public:
     ~ScoreBoard() { freeList(); } // 析构时自动释放内存
 
     // 核心功能
-    void addScore(int score, int steps, std::string time); // 按分数降序插入
+    // 返回值：若进入前10返回排名（1..10），否则返回 0
+    int addScore(int score, int steps, std::string time); // 按分数降序插入并修剪为前10
     void printScores();                                   // 打印排行榜
-    bool saveToFile(const std::string& filename);         // 保存到文件
+    bool saveToFile(const std::string& filename);         // 保存到文件（只保存前10）
     bool loadFromFile(const std::string& filename);       // 从文件加载
+    // 获取排行榜数据（用于Qt界面）
+    std::vector<std::tuple<int, int, std::string>> getScores(); // 返回分数、步数、时间的列表
 };
 
 #endif // SCOREBOARD_H
