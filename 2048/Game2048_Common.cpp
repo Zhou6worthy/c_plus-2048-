@@ -54,12 +54,10 @@ std::vector<int> Game2048::compressRow(std::vector<int> row, std::vector<Special
 
             addScore += static_cast<int>(finalNew);
 
-            // 炸弹触发：compressRow 只标记 pendingExplosions，实际爆炸在 processSpecialsAfterMove
+            // 新炸弹逻辑：只要参与合并的一方是炸弹（且合并数值相同）就触发爆炸
             bool leftIsBomb = (resultSpec[writePos - 1] == BOMB);
             bool srcIsBomb = (srcSpec == BOMB);
-            bool leftHasOtherSpecial = (resultSpec[writePos - 1] != NONE);
-            bool srcHasOtherSpecial = (srcSpec != NONE);
-            if ((leftIsBomb && srcIsBomb) || (leftIsBomb && !srcHasOtherSpecial) || (srcIsBomb && !leftHasOtherSpecial)) {
+            if (leftIsBomb || srcIsBomb) {
                 if (!processIsColumn) pendingExplosions.emplace_back(processIndex, writePos - 1);
                 else pendingExplosions.emplace_back(writePos - 1, processIndex);
             }
@@ -67,7 +65,24 @@ std::vector<int> Game2048::compressRow(std::vector<int> row, std::vector<Special
             resultRow[writePos - 1] = static_cast<int>(finalNew);
             merged[writePos - 1] = true;
 
-            if (leftHasDouble) resultSpec[writePos - 1] = NONE;
+            // special 传播策略：
+            // - 如果左侧为 DOUBLE，则 DOUBLE 被消费（清除）
+            // - 否则优先保留左侧的非 NONE 非 DOUBLE special
+            // - 如果左侧无 special，则继承 src 的非 NONE 非 DOUBLE special（保证 FREEZE 能触发）
+            SpecialType leftSpec = resultSpec[writePos - 1];
+            SpecialType newSpec = NONE;
+            if (leftSpec != NONE && leftSpec != DOUBLE) newSpec = leftSpec;
+            else if (srcSpec != NONE && srcSpec != DOUBLE) newSpec = srcSpec;
+            else if (leftSpec == DOUBLE && srcSpec != NONE && srcSpec != DOUBLE) {
+                // 如果左侧是 DOUBLE 且右侧是其他 special（例如 FREEZE/BOMB），优先继承右侧 special
+                newSpec = srcSpec;
+            }
+            if (leftHasDouble && newSpec == NONE) {
+                // left 的 DOUBLE 被消费，且没有其他 special 可继承，则清空
+                resultSpec[writePos - 1] = NONE;
+            } else {
+                resultSpec[writePos - 1] = newSpec;
+            }
         } else {
             resultRow[writePos] = val;
             if (resultSpec[writePos] == NONE && srcSpec != NONE) resultSpec[writePos] = srcSpec;
@@ -119,7 +134,7 @@ void Game2048::saveState() {
     while (!redoStack.empty()) redoStack.pop();
 }
 
-// processSpecialsAfterMove (与原实现一致)
+// processSpecialsAfterMove (与原实现一致，炸弹爆炸按 pendingExplosions 处理)
 void Game2048::processSpecialsAfterMove() {
     for (auto &p : pendingExplosions) {
         int i = p.first, j = p.second;
@@ -167,8 +182,7 @@ bool Game2048::canMoveVertically() const {
 // 冻结列不会在垂直方向被移动；横向移动时：
 //  - 冻结列位置本身作为分段边界（障碍），不能被穿越
 //  - 右侧的格子可以移动到包含冻结列的分段左端（即可以进入/合并到冻结列）
-// 实现思路：将每一行按冻结列分成若干段，对每一段局部压缩（SSE：不跨段），
-// 并把分段压缩时产生的 pendingExplosions 的列索引映射回全局列索引
+// 修正：当所有列都被冻结时，不把所有列都当作障碍（避免整盘卡死）
 bool Game2048::moveLeft() {
     bool moved = false;
     int totalAddScore = 0;
@@ -191,6 +205,8 @@ bool Game2048::moveLeft() {
         // collect frozen column indices (act as walls)
         std::vector<int> walls;
         for (int c = 0; c < size; ++c) if (columnFreezeTurns[c] > 0) walls.push_back(c);
+        // 修复：如果所有列都被冻结，不将其视作障碍（否则无法横向移动）
+        if ((int)walls.size() == size) walls.clear();
 
         // helper: compress a segment [segL, segR] (inclusive) in local coordinates,
         // segL..segR maps to global columns segL..segR
@@ -232,12 +248,10 @@ bool Game2048::moveLeft() {
 
                     addScore += static_cast<int>(finalNew);
 
+                    // 新炸弹逻辑：只要参与合并的一方是炸弹（且合并数值相同）就触发爆炸
                     bool leftIsBomb = (resultSpec[writePos - 1] == BOMB);
                     bool srcIsBomb = (srcSpec == BOMB);
-                    bool leftHasOtherSpecial = (resultSpec[writePos - 1] != NONE);
-                    bool srcHasOtherSpecial = (srcSpec != NONE);
-                    if ((leftIsBomb && srcIsBomb) || (leftIsBomb && !srcHasOtherSpecial) || (srcIsBomb && !leftHasOtherSpecial)) {
-                        // map local writePos-1 back to global column index
+                    if (leftIsBomb || srcIsBomb) {
                         int globalCol = segL + (writePos - 1);
                         if (!processIsColumn) pendingExplosions.emplace_back(processIndex, globalCol);
                         else pendingExplosions.emplace_back(globalCol, processIndex);
@@ -246,7 +260,17 @@ bool Game2048::moveLeft() {
                     resultRow[writePos - 1] = static_cast<int>(finalNew);
                     merged[writePos - 1] = true;
 
-                    if (leftHasDouble) resultSpec[writePos - 1] = NONE;
+                    // special 传播策略（同 compressRow）
+                    SpecialType leftSpec = resultSpec[writePos - 1];
+                    SpecialType newSpec = NONE;
+                    if (leftSpec != NONE && leftSpec != DOUBLE) newSpec = leftSpec;
+                    else if (srcSpec != NONE && srcSpec != DOUBLE) newSpec = srcSpec;
+                    else if (leftSpec == DOUBLE && srcSpec != NONE && srcSpec != DOUBLE) newSpec = srcSpec;
+                    if (leftHasDouble && newSpec == NONE) {
+                        resultSpec[writePos - 1] = NONE;
+                    } else {
+                        resultSpec[writePos - 1] = newSpec;
+                    }
                 }
                 else {
                     resultRow[writePos] = val;
@@ -265,7 +289,7 @@ bool Game2048::moveLeft() {
             }
 
             rowAddScore += addScore;
-            };
+        };
 
         if (walls.empty()) {
             // no frozen columns, compress whole row as before
@@ -344,6 +368,8 @@ bool Game2048::moveRight() {
         // collect frozen column indices (act as walls)
         std::vector<int> walls;
         for (int c = 0; c < size; ++c) if (columnFreezeTurns[c] > 0) walls.push_back(c);
+        // 修复：如果所有列都被冻结，不将其视作障碍（否则无法横向移动）
+        if ((int)walls.size() == size) walls.clear();
 
         // helper: compress a segment [segL, segR] (inclusive) in local coordinates
         auto compressSegment = [&](int segL, int segR) {
@@ -382,12 +408,10 @@ bool Game2048::moveRight() {
 
                     addScore += static_cast<int>(finalNew);
 
-                    // 仅在双方都是 BOMB 或 一方为 BOMB 且另一方为普通块（无 special）时触发
+                    // 新炸弹逻辑：只要参与合并的一方是炸弹（且合并数值相同）就触发爆炸
                     bool leftIsBomb = (resultSpec[writePos - 1] == BOMB);
                     bool srcIsBomb = (srcSpec == BOMB);
-                    bool leftHasOtherSpecial = (resultSpec[writePos - 1] != NONE);
-                    bool srcHasOtherSpecial = (srcSpec != NONE);
-                    if ((leftIsBomb && srcIsBomb) || (leftIsBomb && !srcHasOtherSpecial) || (srcIsBomb && !leftHasOtherSpecial)) {
+                    if (leftIsBomb || srcIsBomb) {
                         int globalCol = segL + (writePos - 1);
                         if (!processIsColumn) pendingExplosions.emplace_back(processIndex, globalCol);
                         else pendingExplosions.emplace_back(globalCol, processIndex);
@@ -396,7 +420,17 @@ bool Game2048::moveRight() {
                     resultRow[writePos - 1] = static_cast<int>(finalNew);
                     merged[writePos - 1] = true;
 
-                    if (leftHasDouble) resultSpec[writePos - 1] = NONE;
+                    // special 传播策略（同 compressRow）
+                    SpecialType leftSpec = resultSpec[writePos - 1];
+                    SpecialType newSpec = NONE;
+                    if (leftSpec != NONE && leftSpec != DOUBLE) newSpec = leftSpec;
+                    else if (srcSpec != NONE && srcSpec != DOUBLE) newSpec = srcSpec;
+                    else if (leftSpec == DOUBLE && srcSpec != NONE && srcSpec != DOUBLE) newSpec = srcSpec;
+                    if (leftHasDouble && newSpec == NONE) {
+                        resultSpec[writePos - 1] = NONE;
+                    } else {
+                        resultSpec[writePos - 1] = newSpec;
+                    }
                 }
                 else {
                     resultRow[writePos] = val;
@@ -407,13 +441,14 @@ bool Game2048::moveRight() {
 
             for (int p = 0; p < segSize; ++p) if (resultRow[p] == 0) resultSpec[p] = NONE;
 
+            // write back to newRow/newSpec (global coordinates)
             for (int p = 0; p < segSize; ++p) {
                 newRow[segL + p] = resultRow[p];
                 newSpec[segL + p] = resultSpec[p];
             }
 
             rowAddScore += addScore;
-            };
+        };
 
         if (walls.empty()) {
             int addScore = 0;
@@ -450,6 +485,12 @@ bool Game2048::moveRight() {
         std::reverse(specialGrid[i].begin(), specialGrid[i].end());
     }
     std::reverse(columnFreezeTurns.begin(), columnFreezeTurns.end());
+
+    // 修正 pendingExplosions 中的列索引（之前在反转坐标系下记录）
+    for (auto &p : pendingExplosions) {
+        // p = (row, col_reversed) -> col_real = size-1 - col_reversed
+        p.second = size - 1 - p.second;
+    }
 
     if (moved) {
         score += totalAddScore;
@@ -555,6 +596,12 @@ bool Game2048::moveDown() {
                 specialGrid[r][col] = colSpecs[size - 1 - r];
             }
         }
+    }
+
+    // 修正 pendingExplosions 中的行索引（之前在反转坐标系下记录）
+    for (auto &p : pendingExplosions) {
+        // p = (row_reversed, col) -> row_real = size-1 - row_reversed
+        p.first = size - 1 - p.first;
     }
 
     if (moved) {
